@@ -36,7 +36,6 @@ public class UpdateChecker implements Listener {
     private String downloadUrl = "";
     private String directLink = "";
 
-    // Console colors
     private static final String CONSOLE_RESET = "\u001B[0m";
     private static final String CONSOLE_BRIGHT_GREEN = "\u001B[92m";
     private static final String CONSOLE_YELLOW = "\u001B[33m";
@@ -45,7 +44,6 @@ public class UpdateChecker implements Listener {
     private static final String CONSOLE_PINK = "\u001B[38;5;206m";
     private static final String CONSOLE_DEEP_PINK = "\u001B[38;5;198m";
 
-    // Track players who have received an update notification today
     private final Map<UUID, LocalDate> notifiedPlayers = new HashMap<>();
 
     public UpdateChecker(JavaPlugin plugin) {
@@ -53,7 +51,6 @@ public class UpdateChecker implements Listener {
         this.currentVersion = plugin.getDescription().getVersion();
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
 
-        // Check for updates asynchronously on plugin startup
         checkForUpdates().thenAccept(hasUpdate -> {
             if (hasUpdate) {
                 displayConsoleUpdateMessage();
@@ -109,7 +106,6 @@ public class UpdateChecker implements Listener {
     public CompletableFuture<Boolean> checkForUpdates() {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                // String currentVersion = "0.0.0";
                 URL url = new URL("https://api.modrinth.com/v2/project/" + projectId + "/version");
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
@@ -129,17 +125,14 @@ public class UpdateChecker implements Listener {
                     return false;
                 }
 
-                // Find the latest version
                 JsonObject latestVersionObj = null;
                 for (JsonElement element : versions) {
                     JsonObject version = element.getAsJsonObject();
-                    // Skip pre-releases by checking if version_type is "release"
                     String versionType = version.get("version_type").getAsString();
                     if (versionType.equals("release")) {
                         if (latestVersionObj == null) {
                             latestVersionObj = version;
                         } else {
-                            // Compare date_published to find the newest
                             String currentDate = latestVersionObj.get("date_published").getAsString();
                             String newDate = version.get("date_published").getAsString();
                             if (newDate.compareTo(currentDate) > 0) {
@@ -156,21 +149,17 @@ public class UpdateChecker implements Listener {
                 latestVersion = latestVersionObj.get("version_number").getAsString();
                 String versionId = latestVersionObj.get("id").getAsString();
 
-                // Create proper Modrinth page link (instead of direct download)
                 downloadUrl = "https://modrinth.com/plugin/" + projectId + "/version/" + latestVersion;
 
-                // Also save direct link (but don't display it)
                 JsonArray files = latestVersionObj.getAsJsonArray("files");
                 if (!files.isEmpty()) {
                     JsonObject primaryFile = files.get(0).getAsJsonObject();
                     directLink = primaryFile.get("url").getAsString();
                 }
 
-                // Compare versions using the Version class
                 Version latest = new Version(latestVersion);
                 Version current = new Version(currentVersion);
 
-                // If latest version is greater than current version, an update is available
                 updateAvailable = latest.compareTo(current) > 0;
                 return updateAvailable;
 
@@ -192,11 +181,11 @@ public class UpdateChecker implements Listener {
             return;
         }
 
-        TextColor primaryBlue = TextColor.fromHexString("#3B82F6"); // Brighter blue
-        TextColor green = TextColor.fromHexString("#22C55E"); // Vibrant green
-        TextColor redPink = TextColor.fromHexString("#EF4444"); // Bold red
-        TextColor orange = TextColor.fromHexString("#F97316"); // Rich orange
-        TextColor white = TextColor.fromHexString("#F3F4F6"); // Softer white
+        TextColor primaryBlue = TextColor.fromHexString("#3B82F6");
+        TextColor green = TextColor.fromHexString("#22C55E");
+        TextColor redPink = TextColor.fromHexString("#EF4444");
+        TextColor orange = TextColor.fromHexString("#F97316");
+        TextColor white = TextColor.fromHexString("#F3F4F6");
 
         Component borderTop = Component.text("───── CelestCombat Update ─────").color(primaryBlue);
         Component borderBottom = Component.text("───────────────────────").color(primaryBlue);
@@ -235,37 +224,31 @@ public class UpdateChecker implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
-        // Check if player has permission and if there's an update
         if (player.hasPermission("celestcombat.update.notify")) {
 
             UUID playerId = player.getUniqueId();
             LocalDate today = LocalDate.now();
 
-            // Clean up old notifications
             notifiedPlayers.entrySet().removeIf(entry -> entry.getValue().isBefore(today));
 
-            // Check if the player has already been notified today
             if (notifiedPlayers.containsKey(playerId) && notifiedPlayers.get(playerId).isEqual(today)) {
-                return; // Already notified today
+                return;
             }
 
             if (updateAvailable) {
-                // Wait a bit before sending the notification
                 Scheduler.runTaskLater(() -> {
                     sendUpdateNotification(player);
-                    notifiedPlayers.put(playerId, today); // Mark as notified after sending
+                    notifiedPlayers.put(playerId, today);
                 }, 40L);
             } else {
-                // Re-check for updates when an operator joins, but only if we haven't found an update yet
                 checkForUpdates().thenAccept(hasUpdate -> {
                     if (hasUpdate) {
                         Scheduler.runTask(() -> {
                             sendUpdateNotification(player);
-                            notifiedPlayers.put(playerId, today); // Mark as notified after sending
+                            notifiedPlayers.put(playerId, today);
                         });
                     }
                 });
-                // Do NOT mark as notified here if no update is found yet
             }
         }
     }

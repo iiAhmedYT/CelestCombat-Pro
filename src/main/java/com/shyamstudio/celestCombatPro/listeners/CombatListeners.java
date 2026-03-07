@@ -321,7 +321,8 @@ public class CombatListeners implements Listener {
         Player player = event.getPlayer();
 
         if (CelestCombatAPI.getCombatAPI().isInCombat(player)) {
-            String command = event.getMessage().split(" ")[0].toLowerCase().substring(1);
+            String fullCommand = event.getMessage().substring(1); // Remove leading "/"
+            String command = fullCommand.split(" ")[0].toLowerCase();
 
             // Get command blocking mode from config
             String blockMode = plugin.getConfig().getString("combat.command_block_mode", "whitelist").toLowerCase();
@@ -334,8 +335,9 @@ public class CombatListeners implements Listener {
                 List<String> blockedCommands = plugin.getConfig().getStringList("combat.blocked_commands");
 
                 for (String blockedCmd : blockedCommands) {
-                    if (command.equalsIgnoreCase(blockedCmd) ||
-                            (blockedCmd.endsWith("*") && command.startsWith(blockedCmd.substring(0, blockedCmd.length() - 1)))) {
+                    String blockedCmdLower = blockedCmd.toLowerCase();
+                    if (command.equalsIgnoreCase(blockedCmdLower) ||
+                            (blockedCmdLower.endsWith("*") && command.startsWith(blockedCmdLower.substring(0, blockedCmdLower.length() - 1)))) {
                         shouldBlock = true;
                         break;
                     }
@@ -346,8 +348,9 @@ public class CombatListeners implements Listener {
                 shouldBlock = true; // Block by default
 
                 for (String allowedCmd : allowedCommands) {
-                    if (command.equalsIgnoreCase(allowedCmd) ||
-                            (allowedCmd.endsWith("*") && command.startsWith(allowedCmd.substring(0, allowedCmd.length() - 1)))) {
+                    String allowedCmdLower = allowedCmd.toLowerCase();
+                    if (command.equalsIgnoreCase(allowedCmdLower) ||
+                            (allowedCmdLower.endsWith("*") && command.startsWith(allowedCmdLower.substring(0, allowedCmdLower.length() - 1)))) {
                         shouldBlock = false; // Command is allowed
                         break;
                     }

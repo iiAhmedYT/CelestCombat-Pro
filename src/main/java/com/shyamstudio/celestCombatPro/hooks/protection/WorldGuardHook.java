@@ -37,20 +37,16 @@ public class WorldGuardHook implements Listener {
     private final CelestCombatPro plugin;
     private final CombatManager combatManager;
 
-    // Message cooldown optimization
     private final Map<UUID, Long> lastMessageTime = new ConcurrentHashMap<>();
     private final long MESSAGE_COOLDOWN = 2000;
 
-    // Track ender pearls from combat players
     private final Map<UUID, UUID> combatPlayerPearls = new ConcurrentHashMap<>();
     private final Map<UUID, PearlLocationData> pearlThrowLocations = new ConcurrentHashMap<>();
 
-    // Visual barrier system
     private final Map<UUID, Set<Location>> playerBarriers = new ConcurrentHashMap<>();
     private final Map<Location, Material> originalBlocks = new ConcurrentHashMap<>();
     private final Map<Location, Set<UUID>> barrierViewers = new ConcurrentHashMap<>();
 
-    // Configuration
     private boolean globalEnabled;
     private Map<String, Boolean> worldSettings;
     private int barrierDetectionRadius;
@@ -58,21 +54,25 @@ public class WorldGuardHook implements Listener {
     private Material barrierMaterial;
     private double pushBackForce;
 
-    // Enhanced caching system
-    private final Map<String, SafeZoneInfo> safeZoneCache = new ConcurrentHashMap<>();
+    private final Map<Long, SafeZoneInfo> safeZoneCache = new ConcurrentHashMap<>();
     private final Map<String, Long> regionCheckCache = new ConcurrentHashMap<>();
     private long lastCacheClean = System.currentTimeMillis();
     private static final long CACHE_CLEAN_INTERVAL = 30000;
-    private static final long CACHE_TTL = 10000; // 10 seconds TTL for cache entries
+    private static final long CACHE_TTL = 10000;
     private static final int MAX_CACHE_SIZE = 2000;
 
-    // Batch processing for barrier updates
     private final Map<UUID, Long> lastBarrierUpdate = new ConcurrentHashMap<>();
-    private static final long BARRIER_UPDATE_INTERVAL = 250; // Only update barriers every 500ms per player
+    private static final long BARRIER_UPDATE_INTERVAL = 250;
 
-    // Pre-computed region managers for performance
     private final Map<String, RegionManager> regionManagerCache = new ConcurrentHashMap<>();
     private final RegionQuery regionQuery;
+
+    private static long locationToCacheKey(Location loc) {
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+        return (((long)x & 0x3FFFFFF) << 38) | (((long)z & 0x3FFFFFF) << 12) | ((long)y & 0xFFF);
+    }
 
     private static class SafeZoneInfo {
         final boolean isSafeZone;
@@ -108,7 +108,6 @@ public class WorldGuardHook implements Listener {
         this.plugin = plugin;
         this.combatManager = combatManager;
 
-        // Pre-initialize region query for better performance
         this.regionQuery = WorldGuard.getInstance().getPlatform().getRegionContainer().createQuery();
 
         reloadConfig();
@@ -123,7 +122,6 @@ public class WorldGuardHook implements Listener {
         this.barrierMaterial = loadBarrierMaterial();
         this.pushBackForce = plugin.getConfig().getDouble("safezone_protection.push_back_force", 0.6);
 
-        // Clear caches when config reloads
         safeZoneCache.clear();
         regionCheckCache.clear();
         regionManagerCache.clear();
@@ -152,12 +150,10 @@ public class WorldGuardHook implements Listener {
 
         String worldName = world.getName();
 
-        // Check if there's a specific setting for this world
         if (worldSettings.containsKey(worldName)) {
             return worldSettings.get(worldName);
         }
 
-        // Fall back to global setting
         return globalEnabled;
     }
 
@@ -177,7 +173,6 @@ public class WorldGuardHook implements Listener {
 
         Player player = (Player) source;
 
-        // Check if enabled in this world
         if (!isEnabledInWorld(player.getWorld())) return;
 
         if (combatManager.isInCombat(player)) {
@@ -257,43 +252,44 @@ public class WorldGuardHook implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onPlayerMove(PlayerMoveEvent event) {
-        if (!CelestCombatPro.hasWorldGuard) return;
+        public void onPlayerMove(PlayerMoveEvent event) {
+            if (!CelestCombatPro.hasWorldGuard) return;
 
-        Player player = event.getPlayer();
+            Player player = event.getPlayer();
 
-        // Check if enabled in this world
-        if (!isEnabledInWorld(player.getWorld())) {
-            removePlayerBarriers(player);
-            return;
+            // Check if enabled in this world
+            if (!isEnabledInWorld(player.getWorld())) {
+                removePlayerBarriers(player);
+                return;
+            }
+
+            if (!combatManager.isInCombat(player)) {
+                removePlayerBarriers(player);
+                return;
+            }
+
+            Location from = event.getFrom();
+            Location to = event.getTo();
+
+            // Early exit if player hasn't moved to a new block
+            if (to == null || (from.getBlockX() == to.getBlockX() &&
+                    from.getBlockY() == to.getBlockY() &&
+                    from.getBlockZ() == to.getBlockZ())) {
+                return;
+            }
+
+            // Only check safezone transitions, not every movement
+            SafeZoneInfo fromInfo = getSafeZoneInfo(from);
+            SafeZoneInfo toInfo = getSafeZoneInfo(to);
+
+            if (!fromInfo.isSafeZone && toInfo.isSafeZone) {
+                pushPlayerBack(player, from, to);
+                sendCooldownMessage(player, "combat_no_safezone_entry");
+            }
+
+            // Throttle barrier updates per player
+            updatePlayerBarriersThrottled(player);
         }
-
-        if (!combatManager.isInCombat(player)) {
-            removePlayerBarriers(player);
-            return;
-        }
-
-        Location from = event.getFrom();
-        Location to = event.getTo();
-
-        if (to == null || (from.getBlockX() == to.getBlockX() &&
-                from.getBlockY() == to.getBlockY() &&
-                from.getBlockZ() == to.getBlockZ())) {
-            return;
-        }
-
-        // Batch safezone checks to reduce WorldGuard API calls
-        SafeZoneInfo fromInfo = getSafeZoneInfo(from);
-        SafeZoneInfo toInfo = getSafeZoneInfo(to);
-
-        if (!fromInfo.isSafeZone && toInfo.isSafeZone) {
-            pushPlayerBack(player, from, to);
-            sendCooldownMessage(player, "combat_no_safezone_entry");
-        }
-
-        // Throttle barrier updates per player
-        updatePlayerBarriersThrottled(player);
-    }
 
     private void updatePlayerBarriersThrottled(Player player) {
         UUID playerUUID = player.getUniqueId();
@@ -310,7 +306,6 @@ public class WorldGuardHook implements Listener {
     public void onPlayerInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
 
-        // Check if enabled in this world
         if (!isEnabledInWorld(player.getWorld())) {
             removePlayerBarriers(player);
             return;
@@ -360,7 +355,6 @@ public class WorldGuardHook implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
-        // Check if enabled in this world
         if (!isEnabledInWorld(event.getBlock().getWorld())) return;
 
         Location blockLoc = normalizeToBlockLocation(event.getBlock().getLocation());
@@ -384,12 +378,10 @@ public class WorldGuardHook implements Listener {
     private void pushPlayerBack(Player player, Location from, Location to) {
         if (player == null || from == null) return;
 
-        // Teleport player back to the last non-safe location (from) and stop their momentum.
         Location safeLocation = from.clone();
         safeLocation.setPitch(player.getLocation().getPitch());
         safeLocation.setYaw(player.getLocation().getYaw());
 
-        // Use teleportAsync for non-blocking behavior and clear velocity when done.
         player.teleportAsync(safeLocation).thenAccept(success -> {
             try {
                 player.setVelocity(new Vector(0, 0, 0));
@@ -398,7 +390,6 @@ public class WorldGuardHook implements Listener {
         });
     }
 
-    // Public helper so other components can check safezone status
     public boolean isLocationInSafeZone(Location location) {
         return isSafeZone(location);
     }
@@ -430,8 +421,17 @@ public class WorldGuardHook implements Listener {
             return;
         }
 
+        UUID playerUUID = player.getUniqueId();
         Set<Location> newBarriers = findNearbyBarrierLocations(player.getLocation());
-        Set<Location> currentBarriers = playerBarriers.getOrDefault(player.getUniqueId(), new HashSet<>());
+        Set<Location> currentBarriers = playerBarriers.get(playerUUID);
+
+        if (currentBarriers != null && currentBarriers.equals(newBarriers)) {
+            return;
+        }
+
+        if (currentBarriers == null) {
+            currentBarriers = new HashSet<>();
+        }
 
         Set<Location> toRemove = new HashSet<>(currentBarriers);
         toRemove.removeAll(newBarriers);
@@ -446,9 +446,9 @@ public class WorldGuardHook implements Listener {
         }
 
         if (newBarriers.isEmpty()) {
-            playerBarriers.remove(player.getUniqueId());
+            playerBarriers.remove(playerUUID);
         } else {
-            playerBarriers.put(player.getUniqueId(), newBarriers);
+            playerBarriers.put(playerUUID, newBarriers);
         }
     }
 
@@ -456,19 +456,26 @@ public class WorldGuardHook implements Listener {
         Set<Location> barrierLocations = new HashSet<>();
         int radius = barrierDetectionRadius;
 
-        // Pre-calculate radius squared for faster distance checks
         double radiusSquared = radius * radius;
+
+        World world = playerLoc.getWorld();
+        int baseX = playerLoc.getBlockX();
+        int baseY = playerLoc.getBlockY();
+        int baseZ = playerLoc.getBlockZ();
+
+        Location checkLoc = new Location(world, 0, 0, 0);
 
         for (int x = -radius; x <= radius; x++) {
             for (int z = -radius; z <= radius; z++) {
-                // Fast distance check using squared distance
                 if (x * x + z * z > radiusSquared) continue;
 
-                for (int y = -2; y <= barrierHeight; y++) {
-                    Location checkLoc = playerLoc.clone().add(x, y, z);
+                for (int y = -1; y <= 2; y++) {
+                    checkLoc.setX(baseX + x);
+                    checkLoc.setY(baseY + y);
+                    checkLoc.setZ(baseZ + z);
 
                     if (isBorderLocation(checkLoc)) {
-                        barrierLocations.add(normalizeToBlockLocation(checkLoc));
+                        barrierLocations.add(normalizeToBlockLocation(checkLoc.clone()));
                     }
                 }
             }
@@ -481,7 +488,6 @@ public class WorldGuardHook implements Listener {
         SafeZoneInfo info = getSafeZoneInfo(loc);
         if (!info.isSafeZone) return false;
 
-        // Check adjacent blocks - use optimized direction array
         int[][] directions = {{1,0,0}, {-1,0,0}, {0,0,1}, {0,0,-1}};
 
         for (int[] dir : directions) {
@@ -593,14 +599,11 @@ public class WorldGuardHook implements Listener {
 
     private void cleanupCaches(long currentTime) {
         if (currentTime - lastCacheClean > CACHE_CLEAN_INTERVAL) {
-            // Clean expired entries from safezone cache
             safeZoneCache.entrySet().removeIf(entry -> entry.getValue().isExpired());
 
-            // Clean region check cache
             regionCheckCache.entrySet().removeIf(entry ->
                     currentTime - entry.getValue() > CACHE_TTL);
 
-            // Limit cache size
             if (safeZoneCache.size() > MAX_CACHE_SIZE) {
                 safeZoneCache.clear();
             }
@@ -612,14 +615,10 @@ public class WorldGuardHook implements Listener {
         }
     }
 
-    // Optimized safezone checking with enhanced caching
     private SafeZoneInfo getSafeZoneInfo(Location location) {
         if (location == null) return new SafeZoneInfo(false, false);
 
-        String cacheKey = location.getWorld().getName() + ":" +
-                location.getBlockX() + ":" +
-                location.getBlockY() + ":" +
-                location.getBlockZ();
+        long cacheKey = locationToCacheKey(location);
 
         SafeZoneInfo cached = safeZoneCache.get(cacheKey);
         if (cached != null && !cached.isExpired()) {
@@ -627,7 +626,6 @@ public class WorldGuardHook implements Listener {
         }
 
         try {
-            // Get or cache region manager
             String worldName = location.getWorld().getName();
             RegionManager regionManager = regionManagerCache.get(worldName);
             if (regionManager == null) {
@@ -647,7 +645,6 @@ public class WorldGuardHook implements Listener {
                 hasRegions = !regions.getRegions().isEmpty();
 
                 if (hasRegions) {
-                    // Use pre-initialized region query for better performance
                     com.sk89q.worldedit.util.Location worldGuardLoc = BukkitAdapter.adapt(location);
                     boolean pvpAllowed = regionQuery.testState(worldGuardLoc, null, Flags.PVP);
                     isSafeZone = !pvpAllowed;
@@ -675,7 +672,6 @@ public class WorldGuardHook implements Listener {
 
         if (isLocationSafe(location)) return location;
 
-        // Check above and below first (most common solutions)
         for (int y = 1; y <= searchRadius; y++) {
             Location above = location.clone().add(0, y, 0);
             if (isLocationSafe(above)) return above;
@@ -684,7 +680,6 @@ public class WorldGuardHook implements Listener {
             if (isLocationSafe(below)) return below;
         }
 
-        // Spiral search pattern
         for (int distance = 1; distance <= searchRadius; distance++) {
             for (int x = -distance; x <= distance; x++) {
                 for (int z = -distance; z <= distance; z++) {
@@ -744,7 +739,6 @@ public class WorldGuardHook implements Listener {
 
         } catch (IllegalArgumentException e) {
             plugin.getLogger().warning("Invalid barrier material '" + materialName + "' in config. Using RED_STAINED_GLASS instead.");
-            plugin.getLogger().warning("Valid materials can be found at: https://jd.papermc.io/paper/1.21.5/org/bukkit/Material.html");
             return Material.RED_STAINED_GLASS;
         }
     }

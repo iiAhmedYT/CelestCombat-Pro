@@ -18,7 +18,6 @@ public class LanguageUpdater {
     private static final String LANGUAGE_VERSION_KEY = "language_version";
     private static final List<String> SUPPORTED_LANGUAGES = Arrays.asList("en_US", "vi_VN");
 
-    // Track which file types to update
     private final Set<LanguageFileType> activeFileTypes = new HashSet<>();
 
     public LanguageUpdater(JavaPlugin plugin) {
@@ -53,12 +52,10 @@ public class LanguageUpdater {
         for (String language : SUPPORTED_LANGUAGES) {
             File langDir = new File(plugin.getDataFolder(), "language/" + language);
 
-            // Create language directory if it doesn't exist
             if (!langDir.exists()) {
                 langDir.mkdirs();
             }
 
-            // Check and update each language file type
             for (LanguageFileType fileType : activeFileTypes) {
                 File languageFile = new File(langDir, fileType.getFileName());
                 updateLanguageFile(language, languageFile, fileType);
@@ -75,12 +72,10 @@ public class LanguageUpdater {
      */
     private void updateLanguageFile(String language, File languageFile, LanguageFileType fileType) {
         try {
-            // Create parent directory if it doesn't exist
             if (!languageFile.getParentFile().exists()) {
                 languageFile.getParentFile().mkdirs();
             }
 
-            // Create the file if it doesn't exist
             if (!languageFile.exists()) {
                 createDefaultLanguageFileWithHeader(language, languageFile, fileType);
                 plugin.getLogger().info("Created new " + fileType.getFileName() + " for " + language);
@@ -93,7 +88,7 @@ public class LanguageUpdater {
             Version pluginVersion = new Version(currentVersion);
 
             if (configVersion.compareTo(pluginVersion) >= 0) {
-                return; // No update needed
+                return;
             }
 
             if (!configVersionStr.equals("0.0.0")) {
@@ -101,10 +96,8 @@ public class LanguageUpdater {
                         " from version " + configVersionStr + " to " + currentVersion);
             }
 
-            // Store user's current values
             Map<String, Object> userValues = flattenConfig(currentConfig);
 
-            // Create temp file with new default config
             File tempFile = new File(plugin.getDataFolder(),
                     "language/" + language + "/" + fileType.getFileName().replace(".yml", "_new.yml"));
             createDefaultLanguageFileWithHeader(language, tempFile, fileType);
@@ -112,7 +105,6 @@ public class LanguageUpdater {
             FileConfiguration newConfig = YamlConfiguration.loadConfiguration(tempFile);
             newConfig.set(LANGUAGE_VERSION_KEY, currentVersion);
 
-            // Check if there are actual differences before creating backup
             boolean configDiffers = hasConfigDifferences(userValues, newConfig);
 
             if (configDiffers) {
@@ -127,7 +119,6 @@ public class LanguageUpdater {
                 }
             }
 
-            // Apply user values and save
             applyUserValues(newConfig, userValues);
             newConfig.save(languageFile);
             tempFile.delete();
@@ -160,10 +151,8 @@ public class LanguageUpdater {
                 plugin.getLogger().warning("Default " + fileType.getFileName() + " for " + language +
                         " not found in the plugin's resources.");
 
-                // Create empty file with just version
                 destinationFile.getParentFile().mkdirs();
 
-                // Create basic YAML with just the version
                 YamlConfiguration emptyConfig = new YamlConfiguration();
                 emptyConfig.set(LANGUAGE_VERSION_KEY, currentVersion);
                 emptyConfig.set("_note", "This is an empty " + fileType.getFileName() +
@@ -181,37 +170,31 @@ public class LanguageUpdater {
      * Determines if there are actual differences between old and new configs
      */
     private boolean hasConfigDifferences(Map<String, Object> userValues, FileConfiguration newConfig) {
-        // Get all paths from new config (excluding version key)
         Map<String, Object> newConfigMap = flattenConfig(newConfig);
 
-        // Check for removed or changed keys
         for (Map.Entry<String, Object> entry : userValues.entrySet()) {
             String path = entry.getKey();
             Object oldValue = entry.getValue();
 
-            // Skip version key
             if (path.equals(LANGUAGE_VERSION_KEY)) continue;
 
-            // Check if path no longer exists
             if (!newConfig.contains(path)) {
-                return true; // Found a removed path
+                return true;
             }
 
-            // Check if default value changed
             Object newDefaultValue = newConfig.get(path);
             if (newDefaultValue != null && !newDefaultValue.equals(oldValue)) {
-                return true; // Default value changed
+                return true;
             }
         }
 
-        // Check for new keys
         for (String path : newConfigMap.keySet()) {
             if (!path.equals(LANGUAGE_VERSION_KEY) && !userValues.containsKey(path)) {
-                return true; // Found a new path
+                return true;
             }
         }
 
-        return false; // No significant differences
+        return false;
     }
 
     /**
@@ -235,7 +218,6 @@ public class LanguageUpdater {
             String path = entry.getKey();
             Object value = entry.getValue();
 
-            // Don't override version key
             if (path.equals(LANGUAGE_VERSION_KEY)) continue;
 
             if (newConfig.contains(path)) {
